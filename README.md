@@ -8,19 +8,73 @@
 
 > A runtime layer that compiles user intent into **verifiable, auditable, rollback-safe** execution chains — sitting on top of an LLM.
 
-Intent OS is **not** an LLM, and **not** another agent framework. It owns the part the model doesn't: **intent compilation · working memory · permissioned scheduling · acceptance verification**. The model decides *how*; this layer ensures *it's correct, traceable, and reversible when it isn't*.
+Intent OS is **not** an agent, and **not** another agent framework. It is **a runtime layer** that sits *above* an agent: the agent is replaceable scaffolding, this layer is the product. Whatever agent you plug in at L2, the **intent compilation · acceptance verification · permissioned scheduling · audit hash chain · elastic rerouting** above it does not change.
+
+The model decides *how*; this layer ensures *it's correct, traceable, and reversible when it isn't*.
 
 > **Status: prototype / research implementation.** Public API may still change.
 
 ### Why this exists
 
-LLMs are good at reasoning about *what* to do. They are less reliable at guaranteeing *it actually got done right* — side effects happen without approval, results live only in chat logs, and a single failed step can stall the whole run. Intent OS is an engineering backstop for that gap: it doesn't replace the model, it wraps it with a deterministic, inspectable execution layer.
+Every agent harness eventually hits the same wall: the model calls tools directly, results live only in chat logs, a single failed step stalls the whole run, and there is no way to prove *what actually happened*. Intent OS is an engineering backstop for that gap — it does not replace the model or the agent, it wraps them with a deterministic, inspectable execution layer.
 
-### What it's for
+| A plain agent harness | With Intent OS on top |
+|---|---|
+| intent is a prompt; unclear what will execute | intent → structured `Plan` DAG; every node carries **acceptance criteria** |
+| the model decides whether to do side effects | side effects must pass an **approval gate**, risk-tiered |
+| results live in chat logs | receipts enter a **hash-chained audit log** (verifiable, replayable, sealable) |
+| one failed step stalls the run | failure triggers **elastic rerouting**, or **suspension** for a human |
+| "is the environment usable?" is a guess | probes return tri-state: **true / false / unknown** |
 
-- Adding an **auditable, rollback-safe execution layer** to agent applications.
-- A reference implementation for **intent → plan → verify** pipelines.
-- Local automation where **side effects must be controlled** (file writes, command execution) and **human approval** is required for risky actions.
+### What this looks like
+
+A run is not "the model typed something into a shell." It is a compiled, verifiable chain. (Fields below are real; values are illustrative.)
+
+**1. Intent → Plan — every node carries acceptance criteria**
+
+```json
+{
+  "id": "a1b2c3d4",
+  "intent": {
+    "goal": "generate fizzbuzz and verify it runs",
+    "verification": [
+      {"kind": "file_exists", "tool": "write_file", "target": "fizz.py", "expected": true},
+      {"kind": "exit_code",  "tool": "run_python", "target": "fizz.py", "expected": 0}
+    ],
+    "side_effects": [
+      {"tool": "write_file",  "scope": "sandbox/*", "kind": "write",    "reversibility": "easy"},
+      {"tool": "run_python",  "scope": "sandbox/*", "kind": "external", "reversibility": "easy"}
+    ]
+  },
+  "nodes": [
+    {"name": "write_target", "tool": "write_file", "args": {"path": "fizz.py"}, "depends_on": []},
+    {"name": "run_target",   "tool": "run_python", "args": {"path": "fizz.py"}, "depends_on": ["write_target"]}
+  ]
+}
+```
+
+**2. Every receipt enters a hash-chained audit log**
+
+```jsonl
+{"seq": 0, "event": "intent_received",   "data": {...}, "prev_hash": "000…000", "hash": "3f2a…"}
+{"seq": 1, "event": "plan_generated",    "data": {...}, "prev_hash": "3f2a…",  "hash": "8c1b…"}
+{"seq": 2, "event": "approval_requested","data": {"plan_id": "a1b2c3d4"}, "prev_hash": "8c1b…", "hash": "e7d4…"}
+{"seq": 3, "event": "node_started",      "data": {"name": "write_target"}, "prev_hash": "e7d4…", "hash": "12ab…"}
+{"seq": 4, "event": "verify_passed",     "data": {"kind": "exit_code"}, "prev_hash": "12ab…", "hash": "9c3e…"}
+{"seq": 5, "event": "run_finished",      "data": {"status": "ok"}, "prev_hash": "9c3e…", "hash": "4d77…"}
+```
+
+Tamper with any line and every hash after it breaks. `audit verify` checks the chain; `audit seal` freezes it read-only; `audit replay` rebuilds a run's narrative from the events.
+
+**3. Side effects do not execute without an approval gate**
+
+```
+plan a1b2c3d4 requests:
+  scope: sandbox/*
+    write_file  [write]     reversibility=easy
+    run_python  [external]  reversibility=easy
+  → nothing executes until approved
+```
 
 ### Quick start
 
@@ -35,12 +89,14 @@ uv run python main_intent.py            # template mode (default · deterministi
 uv run python main_intent.py --llm      # LLM-first compilation (falls back to template on failure)
 ```
 
-Then just say what you want:
+Then express an intent:
 
 ```
 write a fizzbuzz to fizz.py and run it
 fix broken.py
 ```
+
+> `main.py` is a **reference agent** (a local ReAct coding agent on Ollama) kept as a comparison baseline *without* Intent OS on top — the product entry point is `main_intent.py`.
 
 REPL commands:
 
@@ -92,7 +148,7 @@ L1 trust layer  ←── approval gate · audit hash chain · premise checks ·
   │
 L2 orchestration        ToolExecutor protocol · Inline / Agent impls · MCP bus · checkpoint
   │
-L0 model & hardware     (out of this layer's scope)
+L0 model & hardware     (out of this layer's scope — the agent is replaceable scaffolding)
 ```
 
 ### Core mechanisms
@@ -129,19 +185,73 @@ This repository publishes **code and license only**. Internal design documents a
 
 > 把「用户表达的意图」编译成**可验证、可审计、可回滚**的执行链 —— 一层坐在 LLM 之上的运行时。
 
-Intent OS **不是** LLM，也**不是**又一个 Agent 框架。它负责模型不负责的那部分：**意图编译 · 工作内存 · 权限调度 · 验收验证**。模型负责「想怎么干」，这一层负责「干得对不对、能不能查、出了问题能不能退回去」。
+Intent OS **不是**一个 Agent，也**不是**又一个 Agent 框架。它是**一层运行时**，坐在 Agent **之上**：Agent 是可替换的脚手架，这一层才是产品。无论 L2 插哪个 Agent，上层的**意图编译 · 验收验证 · 权限调度 · 审计哈希链 · 弹性重路由**都不变。
+
+模型负责「想怎么干」，这一层负责「干得对不对、能不能查、出了问题能不能退回去」。
 
 > **状态：原型 / 研究性实现。** 公开 API 仍会变。
 
 ### 为什么做这个
 
-LLM 擅长推理「该做什么」，但难以保证「确实做对了」——副作用未经审批就发生、结果只留在对话记录里、一步失败就整条卡住。Intent OS 是为这道缝隙做的工程兜底：它不替代模型，而是给模型套上一层确定性、可检查的执行层。
+每个 Agent harness 最终都会撞同一堵墙：模型直接调工具、结果只留在对话记录里、一步失败就整条卡死、无法证明「到底发生了什么」。Intent OS 是为这道缝隙做的工程兜底——它不替代模型或 Agent，而是给它们套上一层确定性、可检查的执行层。
 
-### 能用来干什么
+| 普通 Agent harness | 上层加 Intent OS |
+|---|---|
+| 意图是个 prompt，说不清会执行什么 | 意图 → 结构化 `Plan` DAG，每个节点带**验收标准** |
+| 模型自己决定要不要做副作用 | 副作用必须过**审批闸门**，按风险分级 |
+| 结果只留在对话记录 | 回执进**哈希链审计流**（可校验、可回放、可封存） |
+| 一步失败就整条卡死 | 失败触发**弹性重路由**，或**挂起**等人 |
+| 「环境是否可用」靠猜 | 探针三态：**真 / 假 / 未知** |
 
-- 给 Agent 应用加一层**可审计、可回滚的执行层**。
-- 作为**意图 → 计划 → 验收**管线的参考实现。
-- 用于**副作用必须可控**（写文件、跑命令）、**高危操作需人工确认**的本地自动化场景。
+### 实际长什么样
+
+一次 run 不是「模型在 shell 里敲了点什么」，而是一条编译出来、可验证的链。（下方字段为真实结构，值为示意。）
+
+**1. 意图 → Plan —— 每个节点带验收标准**
+
+```json
+{
+  "id": "a1b2c3d4",
+  "intent": {
+    "goal": "生成 fizzbuzz 并验证可运行",
+    "verification": [
+      {"kind": "file_exists", "tool": "write_file", "target": "fizz.py", "expected": true},
+      {"kind": "exit_code",  "tool": "run_python", "target": "fizz.py", "expected": 0}
+    ],
+    "side_effects": [
+      {"tool": "write_file", "scope": "sandbox/*", "kind": "write",    "reversibility": "easy"},
+      {"tool": "run_python", "scope": "sandbox/*", "kind": "external", "reversibility": "easy"}
+    ]
+  },
+  "nodes": [
+    {"name": "write_target", "tool": "write_file", "args": {"path": "fizz.py"}, "depends_on": []},
+    {"name": "run_target",   "tool": "run_python", "args": {"path": "fizz.py"}, "depends_on": ["write_target"]}
+  ]
+}
+```
+
+**2. 每条回执进哈希链审计日志**
+
+```jsonl
+{"seq": 0, "event": "intent_received",   "data": {...}, "prev_hash": "000…000", "hash": "3f2a…"}
+{"seq": 1, "event": "plan_generated",    "data": {...}, "prev_hash": "3f2a…",  "hash": "8c1b…"}
+{"seq": 2, "event": "approval_requested","data": {"plan_id": "a1b2c3d4"}, "prev_hash": "8c1b…", "hash": "e7d4…"}
+{"seq": 3, "event": "node_started",      "data": {"name": "write_target"}, "prev_hash": "e7d4…", "hash": "12ab…"}
+{"seq": 4, "event": "verify_passed",     "data": {"kind": "exit_code"}, "prev_hash": "12ab…", "hash": "9c3e…"}
+{"seq": 5, "event": "run_finished",      "data": {"status": "ok"}, "prev_hash": "9c3e…", "hash": "4d77…"}
+```
+
+改动任意一行，其后所有哈希都对不上。`audit verify` 校验链条；`audit seal` 冻结为只读；`audit replay` 从事件重建一次 run 的叙事。
+
+**3. 副作用不过审批闸门不执行**
+
+```
+plan a1b2c3d4 requests:
+  scope: sandbox/*
+    write_file  [write]     reversibility=easy
+    run_python  [external]  reversibility=easy
+  → 不批准不执行
+```
 
 ### 快速开始
 
@@ -162,6 +272,8 @@ uv run python main_intent.py --llm      # LLM 优先编译（失败自动回退�
 写个 fizzbuzz 存到 fizz.py 然后跑一下
 修 broken.py
 ```
+
+> `main.py` 是一个**参考 Agent**（本地 Ollama 上的 ReAct 编码 Agent），作为**不挂 Intent OS** 的对照基线保留——产品入口是 `main_intent.py`。
 
 REPL 内命令：
 
@@ -213,7 +325,7 @@ L1 信任层  ←── 审批闸门 · 审计哈希链 · 前提校验 · 轨�
   │
 L2 编排执行层   ToolExecutor 协议 · Inline / Agent 实现 · MCP 总线 · Checkpoint
   │
-L0 模型与硬件   （不在本层责任范围）
+L0 模型与硬件   （不在本层责任范围 —— Agent 是可替换的脚手架）
 ```
 
 ### 核心机制
@@ -250,19 +362,73 @@ L0 模型与硬件   （不在本层责任范围）
 
 > ユーザーの意図を**検証可能・監査可能・ロールバック可能**な実行チェーンにコンパイルする —— LLM の上に載るランタイム層。
 
-Intent OS は LLM ではなく、もう一つの Agent フレームワークでもありません。モデルが担わない部分、すなわち**意図コンパイル・ワーキングメモリ・権限スケジューリング・検収検証**を担当します。モデルは「どうやるか」を決め、この層は「正しいか・追跡できるか・問題時に戻せるか」を担保します。
+Intent OS は一つの Agent ではなく、もう一つの Agent フレームワークでもありません。それは**ランタイム層**であり、Agent の**上**に位置します：Agent は取り外し可能な足場、この層がプロダクトです。L2 にどの Agent を差しても、その上の**意図コンパイル・検収検証・権限スケジューリング・監査ハッシュチェーン・弾力的再ルーティング**は変わりません。
+
+モデルは「どうやるか」を決め、この層は「正しいか・追跡できるか・問題時に戻せるか」を担保します。
 
 > **状態：プロトタイプ / 研究実装。** 公開 API はまだ変わる可能性があります。
 
 ### なぜこれを作るのか
 
-LLM は「何をすべきか」の推論は得意ですが、「本当に正しくやり遂げたか」を保証するのは苦手です —— 副作用が承認なしに起きる、結果がチャットログにしか残らない、一歩の失敗で全体が止まる。Intent OS はこの隙間を埋める工学的な安全網です：モデルを置き換えるのではなく、決定的で検査可能な実行層で包みます。
+どの Agent harness も最終的に同じ壁にぶつかります：モデルが直接ツールを呼ぶ、結果はチャットログにしか残らない、一歩の失敗で全体が止まる、「実際に何が起きたか」を証明できない。Intent OS はこの隙間を埋える工学的な安全網です——モデルも Agent も置き換えず、決定的で検査可能な実行層で包みます。
 
-### 何に使えるか
+| 一般的な Agent harness | その上に Intent OS |
+|---|---|
+| 意図はプロンプト、何が実行されるか不明 | 意図 → 構造化 `Plan` DAG、各ノードに**検収基準** |
+| モデルが副作用の実行を決める | 副作用は**承認ゲート**を通る、リスク階層別 |
+| 結果はチャットログのみ | レシートは**ハッシュチェーン監査**へ（検証・再生・封印可能） |
+| 一歩の失敗で全体停止 | 失敗で**弾力的再ルーティング**、または**サスペンド**で人へ |
+| 「環境は使えるか」は推測 | プローブは三状態：**true / false / unknown** |
 
-- Agent アプリケーションに**監査可能・ロールバック可能な実行層**を追加する。
-- **意図 → 計画 → 検証**パイプラインの参照実装。
-- **副作用を制御する**必要がある（ファイル書き込み、コマンド実行）ローカル自動化、**危険操作に人の承認**が必要な場面。
+### 実際の姿
+
+run とは「モデルがシェルに何か打った」ではなく、コンパイルされた検証可能なチェーンです。（下記フィールドは実物、値は示意です。）
+
+**1. 意図 → Plan —— 各ノードに検収基準**
+
+```json
+{
+  "id": "a1b2c3d4",
+  "intent": {
+    "goal": "fizzbuzz を生成し実行を検証",
+    "verification": [
+      {"kind": "file_exists", "tool": "write_file", "target": "fizz.py", "expected": true},
+      {"kind": "exit_code",  "tool": "run_python", "target": "fizz.py", "expected": 0}
+    ],
+    "side_effects": [
+      {"tool": "write_file", "scope": "sandbox/*", "kind": "write",    "reversibility": "easy"},
+      {"tool": "run_python", "scope": "sandbox/*", "kind": "external", "reversibility": "easy"}
+    ]
+  },
+  "nodes": [
+    {"name": "write_target", "tool": "write_file", "args": {"path": "fizz.py"}, "depends_on": []},
+    {"name": "run_target",   "tool": "run_python", "args": {"path": "fizz.py"}, "depends_on": ["write_target"]}
+  ]
+}
+```
+
+**2. 全レシートがハッシュチェーン監査ログへ**
+
+```jsonl
+{"seq": 0, "event": "intent_received",   "data": {...}, "prev_hash": "000…000", "hash": "3f2a…"}
+{"seq": 1, "event": "plan_generated",    "data": {...}, "prev_hash": "3f2a…",  "hash": "8c1b…"}
+{"seq": 2, "event": "approval_requested","data": {"plan_id": "a1b2c3d4"}, "prev_hash": "8c1b…", "hash": "e7d4…"}
+{"seq": 3, "event": "node_started",      "data": {"name": "write_target"}, "prev_hash": "e7d4…", "hash": "12ab…"}
+{"seq": 4, "event": "verify_passed",     "data": {"kind": "exit_code"}, "prev_hash": "12ab…", "hash": "9c3e…"}
+{"seq": 5, "event": "run_finished",      "data": {"status": "ok"}, "prev_hash": "9c3e…", "hash": "4d77…"}
+```
+
+どの行も改ざんすれば以降の全ハッシュが壊れます。`audit verify` がチェーンを検証、`audit seal` は読み取り専用で封印、`audit replay` はイベントから run の叙事を再構築します。
+
+**3. 副作用は承認ゲートを通らないと実行されない**
+
+```
+plan a1b2c3d4 requests:
+  scope: sandbox/*
+    write_file  [write]     reversibility=easy
+    run_python  [external]  reversibility=easy
+  → 承認されないと実行しない
+```
 
 ### クイックスタート
 
@@ -283,6 +449,8 @@ uv run python main_intent.py --llm      # LLM 優先コンパイル（失敗時�
 write a fizzbuzz to fizz.py and run it
 fix broken.py
 ```
+
+> `main.py` は**参照用 Agent**（ローカル Ollama の ReAct コーディング Agent）で、Intent OS を**載せない**比較ベースラインとして残したものです——プロダクト入口は `main_intent.py` です。
 
 REPL コマンド：
 
@@ -330,12 +498,12 @@ L1 信頼層  ←── 承認ゲート・監査ハッシュチェーン・前�
   │
 L2 オーケストレーション層   ToolExecutor プロトコル・Inline / Agent 実装・MCP バス・チェックポイント
   │
-L0 モデルとハードウェア   （この層の責務範囲外）
+L0 モデルとハードウェア   （この層の責務範囲外 —— Agent は取り外し可能な足場）
 ```
 
 ### 中核機構
 
-- **Plan は検収基準を持たないと実行できない** —— 検収仕様のないノードは実行チェーンに入れません。
+- **Plan は検収基準を持たないと実行できない** —— 検収仕様のないノードは実行チェーンに入りません。
 - **副作用は L1 を通る** —— ファイル書き込み、コマンド実行は承認ゲート経由、リスク階層別。
 - **すべてのレシートは監査可能** —— イベントはハッシュチェーンに入る（`verify` で改ざん検出、`seal` で読み取り専用）。
 - **弾力的再ルーティング** —— ノード失敗時に失敗エッジを除外し経路を再計算；経路が無い時のみエスカレーション。
@@ -367,19 +535,73 @@ L0 モデルとハードウェア   （この層の責務範囲外）
 
 > Une couche d'exécution qui compile l'intention de l'utilisateur en chaînes d'exécution **vérifiables, auditées, réversibles** — au-dessus d'un LLM.
 
-Intent OS **n'est pas** un LLM et **n'est pas** un énième framework d'agents. Elle prend en charge ce que le modèle ne fait pas : **compilation d'intention · mémoire de travail · ordonnancement avec permissions · vérification d'acceptation**. Le modèle décide *comment* ; cette couche garantit *que c'est correct, traçable, et réversible quand ça ne l'est pas*.
+Intent OS n'est pas un agent et n'est pas un énième framework d'agents. C'est **une couche d'exécution** qui se situe *au-dessus* d'un agent : l'agent est un échafaudage amovible, cette couche est le produit. Quel que soit l'agent branché en L2, la **compilation d'intention · vérification d'acceptation · ordonnancement avec permissions · chaîne de hachage d'audit · re-routage élastique** au-dessus ne change pas.
+
+Le modèle décide *comment* ; cette couche garantit *que c'est correct, traçable, et réversible quand ça ne l'est pas*.
 
 > **Statut : prototype / implémentation de recherche.** L'API publique peut encore changer.
 
 ### Pourquoi cela existe
 
-Les LLM savent bien raisonner sur *quoi faire*. Ils sont moins fiables pour garantir *que c'est réellement bien fait* — les effets de bord se produisent sans approbation, les résultats ne vivent que dans les journaux de conversation, et une seule étape échouée peut bloquer toute l'exécution. Intent OS est un garde-fou d'ingénierie pour ce manque : elle ne remplace pas le modèle, elle l'enveloppe d'une couche d'exécution déterministe et inspectable.
+Chaque harness d'agents finit par heurter le même mur : le modèle appelle les outils directement, les résultats ne vivent que dans les journaux de conversation, une seule étape échouée bloque tout, et il est impossible de prouver *ce qui s'est réellement passé*. Intent OS est un garde-fou d'ingénierie pour ce manque — elle ne remplace ni le modèle ni l'agent, elle les enveloppe d'une couche d'exécution déterministe et inspectable.
 
-### À quoi ça sert
+| Un harness d'agents classique | Avec Intent OS au-dessus |
+|---|---|
+| l'intention est un prompt ; unclear ce qui s'exécutera | intention → `Plan` DAG structuré ; chaque nœud porte des **critères d'acceptation** |
+| le modèle décide des effets de bord | les effets de bord passent une **porte d'approbation**, par niveau de risque |
+| les résultats restent dans les journaux | les reçus entrent dans une **chaîne de hachage d'audit** (vérifiable, rejouable, scellable) |
+| un échec bloque toute l'exécution | l'échec déclenche un **re-routage élastique**, ou une **suspension** pour un humain |
+| « l'environnement est-il utilisable ? » relève du devin | les sondes sont tri-états : **true / false / unknown** |
 
-- Ajouter une **couche d'exécution auditable et réversible** aux applications d'agents.
-- Une implémentation de référence pour les pipelines **intention → plan → vérification**.
-- L'automatisation locale où **les effets de bord doivent être contrôlés** (écritures de fichiers, exécution de commandes) et où **l'approbation humaine** est requise pour les actions risquées.
+### À quoi cela ressemble
+
+Une exécution n'est pas « le modèle a tapé quelque chose dans un shell ». C'est une chaîne compilée et vérifiable. (Les champs ci-dessous sont réels ; les valeurs sont illustratives.)
+
+**1. Intention → Plan — chaque nœud porte des critères d'acceptation**
+
+```json
+{
+  "id": "a1b2c3d4",
+  "intent": {
+    "goal": "générer fizzbuzz et vérifier l'exécution",
+    "verification": [
+      {"kind": "file_exists", "tool": "write_file", "target": "fizz.py", "expected": true},
+      {"kind": "exit_code",  "tool": "run_python", "target": "fizz.py", "expected": 0}
+    ],
+    "side_effects": [
+      {"tool": "write_file", "scope": "sandbox/*", "kind": "write",    "reversibility": "easy"},
+      {"tool": "run_python", "scope": "sandbox/*", "kind": "external", "reversibility": "easy"}
+    ]
+  },
+  "nodes": [
+    {"name": "write_target", "tool": "write_file", "args": {"path": "fizz.py"}, "depends_on": []},
+    {"name": "run_target",   "tool": "run_python", "args": {"path": "fizz.py"}, "depends_on": ["write_target"]}
+  ]
+}
+```
+
+**2. Chaque reçu entre dans une chaîne de hachage d'audit**
+
+```jsonl
+{"seq": 0, "event": "intent_received",   "data": {...}, "prev_hash": "000…000", "hash": "3f2a…"}
+{"seq": 1, "event": "plan_generated",    "data": {...}, "prev_hash": "3f2a…",  "hash": "8c1b…"}
+{"seq": 2, "event": "approval_requested","data": {"plan_id": "a1b2c3d4"}, "prev_hash": "8c1b…", "hash": "e7d4…"}
+{"seq": 3, "event": "node_started",      "data": {"name": "write_target"}, "prev_hash": "e7d4…", "hash": "12ab…"}
+{"seq": 4, "event": "verify_passed",     "data": {"kind": "exit_code"}, "prev_hash": "12ab…", "hash": "9c3e…"}
+{"seq": 5, "event": "run_finished",      "data": {"status": "ok"}, "prev_hash": "9c3e…", "hash": "4d77…"}
+```
+
+Altérez une ligne, et tous les hachages suivants se brisent. `audit verify` vérifie la chaîne ; `audit seal` la gèle en lecture seule ; `audit replay` reconstruit le récit d'une exécution à partir des événements.
+
+**3. Les effets de bord ne s'exécutent pas sans une porte d'approbation**
+
+```
+plan a1b2c3d4 requests:
+  scope: sandbox/*
+    write_file  [write]     reversibility=easy
+    run_python  [external]  reversibility=easy
+  → rien ne s'exécute sans approbation
+```
 
 ### Démarrage rapide
 
@@ -394,12 +616,14 @@ uv run python main_intent.py            # mode modèle (par défaut · détermin
 uv run python main_intent.py --llm      # compilation LLM d'abord (retombe sur le modèle en cas d'échec)
 ```
 
-Puis exprimez simplement votre intention :
+Puis exprimez votre intention :
 
 ```
 write a fizzbuzz to fizz.py and run it
 fix broken.py
 ```
+
+> `main.py` est un **agent de référence** (un agent ReAct de codage sur Ollama local) conservé comme baseline de comparaison *sans* Intent OS au-dessus — le point d'entrée du produit est `main_intent.py`.
 
 Commandes REPL :
 
@@ -447,7 +671,7 @@ L1 couche de confiance ←── porte d'approbation · chaîne de hachage d'aud
   │
 L2 orchestration             protocole ToolExecutor · impl. Inline / Agent · bus MCP · point de contrôle
   │
-L0 modèle et matériel        (hors du périmètre de cette couche)
+L0 modèle et matériel        (hors du périmètre de cette couche — l'agent est un échafaudage amovible)
 ```
 
 ### Mécanismes centraux
