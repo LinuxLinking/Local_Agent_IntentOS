@@ -1,0 +1,13 @@
+[project]
+name = "intent-os"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "langchain>=1.4.3",
+    "langchain-core>=1.4.3",      # 代码直接 import（langchain_ollama / pypilot graph），不再靠传递
+    "langchain-ollama>=1.1.0",
+    "langgraph>=1.2.14",
+    "mcp>=2.3.0",
+    "pydantic>=2.7.0",            # intent_llm 的 schema 直接用，原本靠 langgraph 传递
+    "typing_extensions>=4.12.0",  # pypilot.graph.state 直接用，原本靠 langchain 传递
+]

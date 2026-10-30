@@ -1,0 +1,29 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+
+# ---- 虚拟环境（依赖 pyproject.toml + uv.lock 复现） ----
+.venv/
+venv/
+
+# ---- IDE ----
+.idea/
+.vscode/
+
+# ---- 本地配置 / 密钥 ----
+.env
+.env.*
+*.local
+
+# ---- 运行产物 ----
+*.log
+*.db
+*.sqlite3
+
+# ---- Agent 运行沙箱：只保留两个演示样本，忽略 agent 运行时生成的其他文件 ----
+sandbox/*
+!sandbox/broken.py
+!sandbox/fizz.py
